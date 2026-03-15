@@ -403,6 +403,8 @@ class ModelCLI:
         df['error'] = df['avg_score'] - df['real_label']
         df['abs_error'] = df['error'].abs()
 
+        date_str = df['datetime'].iloc[0]
+        print(f"分析 {date_str} csv")
 
         # 把 n1 的 close 和 n2 的 high 按照 instrument 合并到 df 里面，且名称叫做 n1close n2high
         # n1: DataFrame, 包含 'instrument', 'close'
@@ -414,48 +416,41 @@ class ModelCLI:
         df = df.merge(n1_renamed, on='instrument', how='left')
         df = df.merge(n2_renamed, on='instrument', how='left')
 
-
-        top_num_list = [10, 30, 50, 80, 100]
+        top_num_list = [10, 20, 30, 50, 80, 100]
         profit_num_list = [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10]
 
         # 使用一个 DataFrame 记录循环里的统计信息
         import pandas as pd
-        results = []
-        for top_num in top_num_list:
+        # 这里用于保存结果，每个 top 如 Top10/Top30... 对应一个 list: 1%~10%止盈胜率, 持有一天平均收益, 持有一天正收益率
+        topk_result_dict = {
+            # 示例结构: "Top10": [止盈1%, 止盈2%, ..., 止盈10%, 持有一天平均收益, 一天正收益占比]
+        }
+        topk_result_index = ["止盈1%胜率", "止盈2%胜率", "止盈3%胜率", "止盈4%胜率", "止盈5%胜率", "止盈6%胜率", "止盈7%胜率", "止盈8%胜率", "止盈9%胜率", "止盈10%胜率", "持有一天平均收益", "一天正收益占比"]
+        for top_num in top_num_list:  # 遍历 top 数字
             topk_df = df.sort_values(by='avg_score', ascending=False).head(top_num)
-            topk_radio = ((topk_df['real_label'] * topk_df['avg_score']) > 0).sum() / len(topk_df)
             topk_avg_profit = topk_df['real_label'].mean()
-            for profit_num in profit_num_list:
+            topk_radio = ((topk_df['real_label'] * topk_df['avg_score']) > 0).sum() / len(topk_df)
+            profit_list = []
+            for profit_num in profit_num_list:  # 遍历止盈比例 0.01 0.02 .. 0.1
                 topk_df_profit = (topk_df['n2high'] > topk_df['n1close'] * (1 + profit_num)).sum() / len(topk_df)
-                # 收集当前循环的统计数据到 results 列表
-                results.append({
-                    'top_num': top_num, 
-                    'topk_radio': topk_radio, 
-                    'topk_avg_profit': topk_avg_profit, 
-                    'profit_num': profit_num, 
-                    'topk_df_profit': topk_df_profit
-                })
-        # 转换为 DataFrame 并展示
-        stats_df = pd.DataFrame(results)
-        # print(stats_df)
-        result_string = ""
-        for top_num in top_num_list:
-            sub_df = stats_df[stats_df['top_num'] == top_num]
-            if not sub_df.empty:
-                result_lines = []
-                result_lines.append(f"top{top_num} 持仓一天正收益几率: {sub_df.iloc[0]['topk_radio']:.2%}, 平均收益: {sub_df.iloc[0]['topk_avg_profit']*100:.2f}%,")
-                for _, row in sub_df.iterrows():
-                    result_lines.append(f"\ttop{top_num} 止盈{row['profit_num']} 胜率: {row['topk_df_profit']:.2%}")
-                result_string += '\n'.join(result_lines) + "\n"
+                profit_list.append(topk_df_profit)
+            # 持有一天平均收益, 一天正收益占比 也加进去
+            profit_list.append(topk_avg_profit)
+            profit_list.append(topk_radio)
+            topk_result_dict[f"Top{top_num}"] = profit_list
+        topk_result_df = pd.DataFrame(topk_result_dict, index=topk_result_index)
+        topk_result_df.index.name = date_str
+        # 将所有数值转为百分比字符串（保留两位小数），仅对float类型进行格式化
+        def to_percent(val):
+            if isinstance(val, float) or isinstance(val, int):
+                return f"{val*100:.2f}%"
+            else:
+                return val
+        pct_df = topk_result_df.applymap(to_percent)
+        print(pct_df.to_markdown(index=True))
 
-        # 使用 groupby('top_num') 来遍历 stats_df
-        if stats_df is not None and 'top_num' in stats_df.columns:
-            for top_num, group in stats_df.groupby('top_num'):
-                # 按 top_num 分组汇总结果字符串
-                self.review_result_string += f"\n#### top{top_num}\n"
-                self.review_result_string += group.to_markdown(index=False) + "\n"
-
-        return stats_df, result_string
+        self.review_result_string += pct_df.to_markdown(index=True) + "\n"
+        return pct_df
 
     def _review_subdir(self, subdir):
         print(f"- {subdir.name}")
@@ -545,11 +540,11 @@ class ModelCLI:
 
         print("分析 df_ret:")
         self.review_result_string += f"### {date_str}_ret.csv\n"
-        stats_df, result_string = self._review_csv(df_ret, real_df, next1_date_original_data, next2_date_original_data)
+        self._review_csv(df_ret, real_df, next1_date_original_data, next2_date_original_data)
 
         print("分析 df_filter_ret:")
         self.review_result_string += f"### {date_str}_filter_ret.csv\n"
-        stats_df, result_string = self._review_csv(df_filter_ret, real_df, next1_date_original_data, next2_date_original_data)
+        self._review_csv(df_filter_ret, real_df, next1_date_original_data, next2_date_original_data)
 
     def review(self):
         """马后炮"""
